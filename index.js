@@ -1,10 +1,26 @@
 let world, projection, path, pathWorld, nodes
 
+// canvas and context
 let canvas = d3.select('canvas.worldMap');
 let ctx = canvas.node().getContext('2d');
 
+// antimeridian countries (Russia and Fiji)
 let AM = {};
 
+// indicator used to color countries
+let indName = 'Right to Strike';
+
+let indDict = makeDict(indTitles, indOptionKey);
+let colArr = ['#a6cee3', '#1f78b4', '#b2df8a', '#33a02c', '#fb9a99'];
+
+// scale to color countries
+let colScale = d3.scaleOrdinal().domain(Object.keys(indDict[indName])).range(colArr);
+
+// transition time and total frames for transition
+let transTime = 1000;
+let framesTrans = (transTime/1000) * 60;
+
+// get retine ratio of device
 function getRetinaRatio() {
     var devicePixelRatio = window.devicePixelRatio || 1
     var c = document.createElement('canvas').getContext('2d')
@@ -21,30 +37,33 @@ function getRetinaRatio() {
 }
 
 var ratio = getRetinaRatio()
-//var ratio = 1;
 
+// scale width and height according to retina ratio
 var width = canvas.attr('width');
 var height = canvas.attr('height');
 var scaledWidth = width * ratio;
 var scaledHeight = height * ratio;
 
-
+// styling with actual (unscaled) width and height to maintain size
 canvas.attr('width', scaledWidth)
       .attr('height', scaledHeight)
       .style('width', width + 'px')
       .style('height', height + 'px')
 
+// scale context according to device ratio
 ctx.scale(ratio, ratio)
 
+// defining projection for the map
 projection = d3.geoRobinson()
   .scale(150 * 1.4)
   .center([-30,23]);
-
+// path generating function
 path = d3.geoPath().projection(projection)//.context(ctx);
 
 
 
 async function readAndDraw(){
+  // read in data (world map, ILR indicators and world bank Labor force)
   world = await d3.json('worldMap.topojson');
   let ilr = await d3.csv("LabCompInd/LabCompIndCode.csv");
   let WB = await d3.csv("LaborForce/labForceCenters.csv");
@@ -54,36 +73,38 @@ async function readAndDraw(){
     return d.properties.ADMIN != "Antarctica";
   })
 
+  // data with neighbors of all countries
   let neighbors = topojson.neighbors(world.objects.worldMap.geometries);
+  // features of all countries from topjson
   nodes = topojson.feature(world, world.objects.worldMap).features;
-
+  // Join data (ILR and WB)
   nodes = joinIndsLabData(nodes, ilr, WB);
 
 
-  //  this path will be used to compute the d feature of each geometrical path in a map
-
+  // Anti meridian countries
   let RUS_Datum = nodes.filter(d => d.properties.ADM0_A3 == "RUS")[0];
   let FJI_Datum = nodes.filter(d => d.properties.ADM0_A3 == "FJI")[0];
 
+  // computing paths of antimeridian countries
   AM.RUS = path(RUS_Datum);
   AM.FJI = path(FJI_Datum);
 
-  nodes.forEach(function(node, i) {
+  //nodes = nodes.filter(d => d.properties.CONTINENT === 'Africa');
 
+  // compute centroids
+  nodes.forEach(function(node, i) {
     var centroid = path.centroid(node);
 
     node.x0 = centroid[0];
     node.y0 = centroid[1];
 
     cleanUpGeometry(node);
-
   });
 
   // This converts a json into an array each element corresponding to one path
   pathWorld = topojson.feature(world, world.objects.worldMap).features;
 
-  //draw()
-
+  // extract labor force of countries and compute and radius scale
   let lF = nodes.map(d => d.data.WB ? +d.data.WB['2018'] : 0);
   let maxLF = d3.max(lF);
 
@@ -94,80 +115,114 @@ async function readAndDraw(){
 
   //// Simulate Shit ////
 
-  simulate();
-
-  function simulate() {
-    nodes.forEach(function(node) {
-      node.x = node.x0;
-      node.y = node.y0;
-      node.r = bubScale(node.data.WB ? +node.data.WB['2018'] : 0);
-    });
-
-    var links = d3.merge(neighbors.map(function(neighborSet, i) {
-      return neighborSet.filter(j => nodes[j]).map(function(j) {
-        return {source: i, target: j, distance: nodes[i].r + nodes[j].r + 2};
+  async function forceSimulate(){
+    return new Promise(function(res){
+      nodes.forEach(function(node) {
+        node.x = node.x0;
+        node.y = node.y0;
+        node.r = bubScale(node.data.WB ? +node.data.WB['2018'] : 0);
       });
-    }));
 
-    var simulation = d3.forceSimulation(nodes)
-        .force("cx", d3.forceX().x(d => width / 2).strength(0.02))
-        .force("cy", d3.forceY().y(d => height / 2).strength(0.02))
-        .force("link", d3.forceLink(links).distance(d => d.distance))
-        .force("x", d3.forceX().x(d => d.x).strength(0.1))
-        .force("y", d3.forceY().y(d => d.y).strength(0.1))
-        .force("collide", d3.forceCollide().strength(0.8).radius(d => d.r + 2))
-        .stop();
+      // var links = d3.merge(neighbors.map(function(neighborSet, i) {
+      //   return neighborSet.filter(j => nodes[j]).map(function(j) {
+      //     return {source: i, target: j, distance: nodes[i].r + nodes[j].r + 2};
+      //   });
+      // }));
+      //
+      // simulation = d3.forceSimulation(nodes).stop();
+          // .force("cx", d3.forceX().x(d => width / 2).strength(0.02))
+          // .force("cy", d3.forceY().y(d => height / 2).strength(0.02))
+          // //.force("link", d3.forceLink(links).distance(d => d.distance))
+          // .force("x", d3.forceX().x(d => d.x).strength(0.1))
+          // .force("y", d3.forceY().y(d => d.y).strength(0.1))
+          // .force("collide", d3.forceCollide().strength(0.8).radius(d => d.r + 2))
+          // .stop();
 
-    while (simulation.alpha() > 0.01) {
-      simulation.tick();
-    }
+      // while (simulation.alpha() > 0.01) {
+      //   simulation.tick();
+      // }
+      res();
+    })
+  }
 
+  async function simulate() {
+
+    await forceSimulate();
+
+    // compute circle coordinates and interpolator functions
     nodes.forEach(function(node, idx){
-      var circle = pseudocircle(node),
-          closestPoints = node.coordinates.slice(1).map(function(ring){
-            var i = d3.scan(circle.map(point => distance(point, ring.centroid)));
-            return ring.map(() => circle[i]);
-          }),
-          interpolator = d3.interpolateArray(node.coordinates, [circle, ...closestPoints]);
+        var circle = pseudocircle(node),
+            closestPoints = node.coordinates.slice(1).map(function(ring){
+              var i = d3.scan(circle.map(point => distance(point, ring.centroid)));
+              return ring.map(() => circle[i]);
+            });
+            //interpolator = d3.interpolateArray(node.coordinates, [circle, ...closestPoints]),
+            interpolatorS = d3.interpolateString(pathString(node.coordinates), pathString([circle, ...closestPoints]));
 
-      node.interpolator = interpolator;
+        //node.interpolator = interpolator;
+        node.interpolatorS = interpolatorS;
     });
 
+    // computing intermediate states( between country path and associated circle )
+    nodes.forEach(function(d, i){
+    	d.interpState = [];
+    	for (var j = 0; j < framesTrans; j++){
+    		d.interpState.push(new Path2D(d.interpolatorS(j/(framesTrans-1))));
+    	}
+    })
+
+    // draw map for the first frame
     draw(0);
-
-    let transTime = 2500;
-    // animate using d3 timer
-    var t = d3.timer(function(elapsed) {
-      let calcInterpVal = elapsed/transTime;
-      if (elapsed <= transTime){
-        draw(calcInterpVal);
-      }
-      else {
-        t.stop();
-      }
-    }, 2000);
-
   }
+
+  await simulate();
+
+  // animate using d3 timer
+  // console.log('performance.now',performance.now());
+  // console.log('d3.now',d3.now(), Date.now());
+
+  let notFirstRun;
+  var t = d3.timer(function(elapsed) {
+    console.log(elapsed);
+    if(!notFirstRun){
+      console.log(performance.now());
+    }
+    notFirstRun = notFirstRun || true;
+    console.log(Math.round(elapsed/transTime * 60));
+
+    //let calcInterpVal = elapsed/transTime;
+    if (elapsed <= transTime + 200){
+      draw(elapsed);
+    }
+    else {
+      t.stop();
+      //  draw(calcInterpVal);
+    }
+  }, Math.abs(performance.now() - d3.now()) + 3000);
+
 
   ///////////////////////
 }
 
 readAndDraw();
 
-function draw(interpVal){
+// draw function called in each frame
+function draw(elapsed){
   ctx.clearRect(0, 0, canvas.node().width, canvas.node().height);
 
-  nodes.forEach(function(d, i){
-    ctx.beginPath();
-    let coords = d.interpolator(interpVal);
-    drawPathCanvas(ctx, coords);
-
-    ctx.fillStyle = '#FBC02D'
-    ctx.fill()
-    ctx.lineWidth = '.5'
+  for (var i = 0, len = nodes.length; i < len; i++){
+    var d = nodes[i];
+    ctx.save();
+    ctx.globalAlpha = .9;
+    var transIdx = Math.round(elapsed/transTime * framesTrans)
+    var pathIns = transIdx < framesTrans - 1 ? d.interpState[transIdx] : d.interpState[framesTrans - 1];
+    ctx.fillStyle = d.data.ilr ? colScale(d.data.ilr[indName]) : 'grey';
+    ctx.fill(pathIns)
+    ctx.lineWidth = '1'
     ctx.strokeStyle = 'black'
     ctx.stroke();
-  })
+    ctx.restore();
+  }
 }
 
 
@@ -180,21 +235,6 @@ function pathToArr(path){
   // remove an array with a zero at the end
   arrCoords.pop();
   return arrCoords;
-}
-
-function drawPathCanvas(ctx, coords){
-  // draw path in canvas using an array of coordinates
-  coords.forEach(function(shape){
-    shape.forEach(function(point, index){
-      if (index == 0){
-        ctx.moveTo(+point[0], +point[1])
-      }
-      else {
-        ctx.lineTo(+point[0], +point[1])
-      }
-    })
-    ctx.closePath();
-  })
 }
 
 function joinIndsLabData(nodes, ilr, WB){
@@ -264,7 +304,6 @@ function cleanUpGeometry(node) {
 
 
   node.startingAngle = Math.atan2(node.coordinates[0][0][1] - node.y0, node.coordinates[0][0][0] - node.x0);
-  //console.log("After reduce and start angle", node.rings[0]);
 }
 
 function bisect(ring, maxSegmentLength) {
@@ -292,6 +331,16 @@ function pathString(d) {
   return (d.coordinates || d).map(ring => "M" + ring.join("L") + "Z").join(" ");
 }
 
+
 function getCountryCode(datum){
   return datum.properties.ADM0_A3
+}
+
+function makeDict(keys, values){
+  let dict = {};
+  keys.forEach((d, i) => {
+    dict[d] = values[i];
+  });
+
+  return dict;
 }
